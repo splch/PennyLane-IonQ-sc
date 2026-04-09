@@ -114,6 +114,14 @@ class IonQDevice(QubitDevice):
             (no value passed at job retrieval). Will generally return more accurate results if your expected output
             distribution has peaks. See `IonQ Debiasing and Sharpening
             <https://ionq.com/resources/debiasing-and-sharpening>`_ for details.
+        noise_model (str): the noise model to use for simulation. Only applies when ``target="simulator"``.
+            Valid values are ``"ideal"``, ``"harmony"``, ``"aria-1"``, ``"aria-2"``, ``"forte-1"``,
+            and ``"forte-enterprise-1"``. Defaults to None (ideal simulation). See
+            `IonQ Simulation with Noise Models <https://docs.ionq.com/guides/simulation-with-noise-models>`_
+            for details.
+        noise_seed (int): seed for the noise model random number generator, for reproducible noisy
+            simulation results. Must be between 1 and 2^31. Only used when ``noise_model`` is set.
+            Defaults to None (random seed).
     """
 
     # pylint: disable=too-many-instance-attributes
@@ -134,6 +142,8 @@ class IonQDevice(QubitDevice):
     observables = {"PauliX", "PauliY", "PauliZ", "Hadamard", "Identity", "Prod"}
 
     # pylint: disable=too-many-arguments
+    NOISE_MODELS = {"ideal", "harmony", "aria-1", "aria-2", "forte-1", "forte-enterprise-1"}
+
     def __init__(
         self,
         wires,
@@ -144,7 +154,20 @@ class IonQDevice(QubitDevice):
         api_key=None,
         error_mitigation=None,
         sharpen=False,
+        noise_model=None,
+        noise_seed=None,
     ):
+
+        if noise_model is not None and noise_model not in self.NOISE_MODELS:
+            raise ValueError(
+                f"Invalid noise model '{noise_model}'. Valid options are: "
+                f"{', '.join(sorted(self.NOISE_MODELS))}."
+            )
+        if noise_seed is not None:
+            if not isinstance(noise_seed, int) or noise_seed < 1 or noise_seed > 2**31:
+                raise ValueError(
+                    f"noise_seed must be an integer between 1 and 2^31, got {noise_seed}."
+                )
 
         super().__init__(wires=wires, shots=shots)
         self._current_circuit_index = None
@@ -153,6 +176,8 @@ class IonQDevice(QubitDevice):
         self.gateset = gateset
         self.error_mitigation = error_mitigation
         self.sharpen = sharpen
+        self.noise_model = noise_model
+        self.noise_seed = noise_seed
         self._operation_map = _GATESET_OPS[gateset]
         self.histograms = []
         self._samples = None
@@ -183,6 +208,11 @@ class IonQDevice(QubitDevice):
         }
         if self.error_mitigation is not None:
             self.job["error_mitigation"] = self.error_mitigation
+        if self.noise_model is not None:
+            noise = {"model": self.noise_model}
+            if self.noise_seed is not None:
+                noise["seed"] = self.noise_seed
+            self.job["noise"] = noise
         if self.job["target"] == "qpu":
             self.job["target"] = "qpu.aria-1"
             warnings.warn(
@@ -595,18 +625,29 @@ class SimulatorDevice(IonQDevice):
             Defaults to 1024.
         api_key (str): The IonQ API key. If not provided, the environment
             variable ``IONQ_API_KEY`` is used.
+        noise_model (str): the noise model to use for simulation. Valid values are ``"ideal"``,
+            ``"harmony"``, ``"aria-1"``, ``"aria-2"``, ``"forte-1"``, and ``"forte-enterprise-1"``.
+            Defaults to None (ideal simulation). See
+            `IonQ Simulation with Noise Models <https://docs.ionq.com/guides/simulation-with-noise-models>`_
+            for details.
+        noise_seed (int): seed for the noise model random number generator, for reproducible noisy
+            simulation results. Must be between 1 and 2^31. Only used when ``noise_model`` is set.
+            Defaults to None (random seed).
     """
 
     name = "IonQ Simulator PennyLane plugin"
     short_name = "ionq.simulator"
 
-    def __init__(self, wires, *, gateset="qis", shots=None, api_key=None):
+    def __init__(self, wires, *, gateset="qis", shots=None, api_key=None,
+                 noise_model=None, noise_seed=None):
         super().__init__(
             wires=wires,
             target="simulator",
             gateset=gateset,
             shots=shots,
             api_key=api_key,
+            noise_model=noise_model,
+            noise_seed=noise_seed,
         )
 
     def generate_samples(self):
