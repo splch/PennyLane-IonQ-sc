@@ -22,9 +22,13 @@ IsingZZ = { properties = ["invertible", "differentiable"] }
 GPI = { properties = [] }
 GPI2 = { properties = [] }
 MS = { properties = [] }
+IonQZZ = { properties = [] }
 
 [operators.observables]
+PauliX = { properties = ["differentiable"] }
+PauliY = { properties = ["differentiable"] }
 PauliZ = { properties = ["differentiable"] }
+Hadamard = { properties = ["differentiable"] }
 Identity = { properties = ["differentiable"] }
 LinearCombination = { properties = ["differentiable"] }
 Sum = { properties = ["differentiable"] }
@@ -45,4 +49,4 @@ dynamic_qubit_management = false
 overlapping_observables = true
 non_commuting_observables = true
 initial_state_prep = false
-supported_mcm_methods = []
+supported_mcm_methods = ["one-shot"]

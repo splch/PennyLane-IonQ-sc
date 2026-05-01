@@ -1,5 +1,9 @@
-from .device import IonQDevice, IonQQPUDevice, IonQSimulatorDevice
-from .ops import GPI, GPI2, MS, XX, YY, ZZ
+"""PennyLane plugin for IonQ Quantum Cloud."""
+
+from .device import _VERSION, IonQDevice, IonQQPUDevice, IonQSimulatorDevice
+from .ops import GPI, GPI2, MS, XX, YY, ZZ, IonQZZ
+
+__version__ = _VERSION
 
 __all__ = [
     "GPI",
@@ -11,4 +15,6 @@ __all__ = [
     "IonQDevice",
     "IonQQPUDevice",
     "IonQSimulatorDevice",
+    "IonQZZ",
+    "__version__",
 ]
