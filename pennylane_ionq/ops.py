@@ -25,6 +25,9 @@ class GPI(Operation):
     def compute_matrix(phi):
         return np.asarray(gpi_matrix(float(phi)), dtype=complex)
 
+    def adjoint(self):
+        return GPI(self.parameters[0], wires=self.wires)
+
 
 class GPI2(Operation):
     num_params = 1
@@ -34,6 +37,9 @@ class GPI2(Operation):
     @staticmethod
     def compute_matrix(phi):
         return np.asarray(gpi2_matrix(float(phi)), dtype=complex)
+
+    def adjoint(self):
+        return GPI2(self.parameters[0] + 0.5, wires=self.wires)
 
 
 class MS(Operation):
@@ -48,6 +54,10 @@ class MS(Operation):
     def compute_matrix(phi0, phi1, theta=0.25):
         return np.asarray(ms_matrix(float(phi0), float(phi1), float(theta)), dtype=complex)
 
+    def adjoint(self):
+        phi0, phi1, theta = self.parameters
+        return MS(phi0, phi1, -theta, wires=self.wires)
+
 
 class IonQZZ(Operation):
     """Native IonQ ZZ interaction; ``angle`` is in units of pi."""
@@ -59,3 +69,6 @@ class IonQZZ(Operation):
     @staticmethod
     def compute_matrix(angle):
         return np.asarray(zz_matrix(float(angle)), dtype=complex)
+
+    def adjoint(self):
+        return IonQZZ(-self.parameters[0], wires=self.wires)

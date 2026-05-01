@@ -1,11 +1,13 @@
 """PennyLane Device implementation backed by ``ionq_core``."""
 
+import math
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Literal
 
 import httpx
 import numpy as np
+import pennylane as qml
 from ionq_core import (
     UNSET,
     APIError,
@@ -17,6 +19,7 @@ from ionq_core import (
 )
 from ionq_core.api.default import (
     create_job,
+    get_job_cost,
     get_job_probabilities,
     get_variant_probabilities,
 )
@@ -38,10 +41,17 @@ from ionq_core.models import (
     QisCircuitInput,
 )
 from pennylane import transform
+from pennylane.decomposition import (
+    add_decomps,
+    disable_graph,
+    enable_graph,
+    enabled_graph,
+    null_decomp,
+    register_resources,
+)
 from pennylane.devices import Device, ExecutionConfig
 from pennylane.devices.modifiers import simulator_tracking, single_tape_support
 from pennylane.devices.preprocess import (
-    decompose,
     measurements_from_samples,
     no_analytic,
     null_postprocessing,
@@ -52,7 +62,10 @@ from pennylane.devices.preprocess import (
 from pennylane.devices.qubit.sampling import sample_probs
 from pennylane.exceptions import DeviceError
 from pennylane.transforms import broadcast_expand, split_non_commuting
+from pennylane.transforms import decompose as graph_decompose
 from pennylane.transforms.core import CompilePipeline
+
+from .ops import GPI, GPI2, IonQZZ
 
 try:
     _VERSION = version("pennylane-ionq")
@@ -127,6 +140,136 @@ def _to_standard_wires(tape):
     return [tape.map_to_standard_wires()], null_postprocessing
 
 
+_TURN = 4 * math.pi  # RZ(theta) = GPI(0) GPI(theta/(4*pi))
+
+
+# Graph-based decomposition rules: register IonQ-native paths for every standard
+# PennyLane gate the device must accept. The graph picks our paths only when the
+# target gate set contains GPI/GPI2/MS/IonQZZ (i.e. on the native gateset).
+@register_resources({GPI2: 1, GPI: 1})
+def _native_h(wires):
+    GPI2(0.25, wires=wires)
+    GPI(0, wires=wires)
+
+
+@register_resources({GPI: 1})
+def _native_x(wires):
+    GPI(0, wires=wires)
+
+
+@register_resources({GPI: 1})
+def _native_y(wires):
+    GPI(0.25, wires=wires)
+
+
+@register_resources({GPI: 2})
+def _native_z(wires):
+    GPI(0, wires=wires)
+    GPI(0.25, wires=wires)
+
+
+@register_resources({GPI: 2})
+def _native_s(wires):
+    GPI(0, wires=wires)
+    GPI(0.125, wires=wires)
+
+
+@register_resources({GPI: 2})
+def _native_t(wires):
+    GPI(0, wires=wires)
+    GPI(0.0625, wires=wires)
+
+
+@register_resources({GPI2: 1})
+def _native_sx(wires):
+    GPI2(0, wires=wires)
+
+
+@register_resources({GPI: 2})
+def _native_rz(theta, wires):
+    GPI(0, wires=wires)
+    GPI(theta / _TURN, wires=wires)
+
+
+@register_resources({GPI2: 2, GPI: 2})
+def _native_rx(theta, wires):
+    GPI2(-0.25, wires=wires)
+    GPI(0, wires=wires)
+    GPI(theta / _TURN, wires=wires)
+    GPI2(0.25, wires=wires)
+
+
+@register_resources({GPI2: 2, GPI: 2})
+def _native_ry(theta, wires):
+    GPI2(0.5, wires=wires)
+    GPI(0, wires=wires)
+    GPI(-theta / _TURN, wires=wires)
+    GPI2(0, wires=wires)
+
+
+@register_resources({IonQZZ: 1})
+def _native_isingzz(theta, wires):
+    IonQZZ(theta / (2 * math.pi), wires=wires)
+
+
+@register_resources({GPI: 2})
+def _native_s_dagger(wires, **_):
+    GPI(0.125, wires=wires)
+    GPI(0, wires=wires)
+
+
+@register_resources({GPI: 2})
+def _native_t_dagger(wires, **_):
+    GPI(0.0625, wires=wires)
+    GPI(0, wires=wires)
+
+
+@register_resources({GPI2: 1})
+def _native_sx_dagger(wires, **_):
+    GPI2(0.5, wires=wires)
+
+
+for _op_type, _decomp in (
+    (qml.Hadamard, _native_h),
+    (qml.PauliX, _native_x),
+    (qml.PauliY, _native_y),
+    (qml.PauliZ, _native_z),
+    (qml.S, _native_s),
+    (qml.T, _native_t),
+    (qml.SX, _native_sx),
+    (qml.RZ, _native_rz),
+    (qml.RX, _native_rx),
+    (qml.RY, _native_ry),
+    (qml.IsingZZ, _native_isingzz),
+    ("Adjoint(S)", _native_s_dagger),
+    ("Adjoint(T)", _native_t_dagger),
+    ("Adjoint(SX)", _native_sx_dagger),
+):
+    add_decomps(_op_type, _decomp)
+
+
+@transform
+def _ionq_decompose(tape, gate_set):
+    """Decompose to ``gate_set`` using the graph-based system, scoped to this call.
+
+    ``qml.decomposition.enable_graph`` mutates global state, so we save/restore
+    it around the underlying ``qml.transforms.decompose`` call to leave the
+    process state untouched for code outside the device.
+    """
+    was_on = enabled_graph()
+    if not was_on:
+        enable_graph()
+    try:
+        return graph_decompose(
+            tape,
+            gate_set=gate_set,
+            fixed_decomps={qml.GlobalPhase: null_decomp},
+        )
+    finally:
+        if not was_on:
+            disable_graph()
+
+
 def _set(value):
     return None if isinstance(value, Unset) else value
 
@@ -192,11 +335,7 @@ class IonQDevice(Device):
         program.add_transform(validate_measurements, name=self.name)
         program.add_transform(split_non_commuting)
         program.add_transform(measurements_from_samples)
-        program.add_transform(
-            decompose,
-            stopping_condition=lambda op: op.name in self._allowed,
-            name=self.name,
-        )
+        program.add_transform(_ionq_decompose, gate_set=set(self._allowed.keys()))
         program.add_transform(broadcast_expand)
         return program
 
@@ -229,9 +368,12 @@ class IonQDevice(Device):
         cls = NativeCircuitInput if self._gateset == "native" else QisCircuitInput
         return cls(gateset=self._gateset, qubits=qubits, circuit=gates)
 
-    def _child(self, qubits, gates):
+    def _child(self, qubits, gates, name):
         cls = NativeCircuit if self._gateset == "native" else QISCircuit
-        return cls(qubits=qubits, circuit=gates)
+        return cls(qubits=qubits, circuit=gates, name=name)
+
+    def _tape_name(self, tape, fallback=UNSET):
+        return getattr(tape, "name", None) or fallback
 
     def _run_one(self, tape):
         n, gates = self._gates(tape)
@@ -240,7 +382,7 @@ class IonQDevice(Device):
             backend=self._backend,
             input_=self._input(n, gates),
             shots=tape.shots.total_shots,
-            name=self._job_name,
+            name=self._tape_name(tape, self._job_name),
             metadata=self._metadata,
             noise=self._noise,
             settings=self._settings(CircuitJobCreationPayloadSettings),
@@ -257,13 +399,16 @@ class IonQDevice(Device):
     def _run_many(self, tapes):
         children = [self._gates(t) for t in tapes]
         max_n = max(n for n, _ in children)
+        base_name = self._job_name if not isinstance(self._job_name, Unset) else "circuit"
+        child_models = [
+            self._child(n, gates, name=self._tape_name(t, f"{base_name}-{i}"))
+            for i, (t, (n, gates)) in enumerate(zip(tapes, children, strict=True))
+        ]
         payload = JSONMultiCircuitJob(
             type_="ionq.multi-circuit.v1",
             backend=self._backend,
             input_=JsonMultiCircuitInput(
-                gateset=self._gateset,
-                qubits=max_n,
-                circuits=[self._child(n, gates) for n, gates in children],
+                gateset=self._gateset, qubits=max_n, circuits=child_models
             ),
             shots=tapes[0].shots.total_shots,
             name=self._job_name,
@@ -314,6 +459,15 @@ class IonQDevice(Device):
         gate_counts = _set(stats.gate_counts)
         if gate_counts is not None:
             update["gate_counts"] = dict(gate_counts.additional_properties)
+        try:
+            cost_resp = get_job_cost.sync(uuid=response.id, client=self._client)
+        except APIError:
+            cost_resp = None
+        if cost_resp is not None:
+            cost = _set(cost_resp.cost)
+            if cost is not None:
+                update["cost"] = cost.value
+                update["cost_unit"] = cost.unit
         self.tracker.update(**update)
 
     def _samples(self, raw_probs, n, shots):
