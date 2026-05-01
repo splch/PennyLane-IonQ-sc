@@ -7,10 +7,21 @@ PauliZ = { properties = ["invertible", "controllable", "differentiable"] }
 Hadamard = { properties = ["invertible", "controllable", "differentiable"] }
 S = { properties = ["invertible", "controllable", "differentiable"] }
 T = { properties = ["invertible", "controllable", "differentiable"] }
+SX = { properties = ["invertible", "controllable", "differentiable"] }
+"Adjoint(S)" = { properties = ["invertible"] }
+"Adjoint(T)" = { properties = ["invertible"] }
+"Adjoint(SX)" = { properties = ["invertible"] }
 RX = { properties = ["invertible", "differentiable"] }
 RY = { properties = ["invertible", "differentiable"] }
 RZ = { properties = ["invertible", "differentiable"] }
 CNOT = { properties = ["invertible", "differentiable"] }
+SWAP = { properties = ["invertible", "differentiable"] }
+IsingXX = { properties = ["invertible", "differentiable"] }
+IsingYY = { properties = ["invertible", "differentiable"] }
+IsingZZ = { properties = ["invertible", "differentiable"] }
+GPI = { properties = [] }
+GPI2 = { properties = [] }
+MS = { properties = [] }
 
 [operators.observables]
 PauliZ = { properties = ["differentiable"] }

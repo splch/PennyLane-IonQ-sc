@@ -6,7 +6,8 @@ requires-python = ">=3.11"
 dependencies = ["pennylane>=0.44", "ionq-core>=0.1"]
 
 [project.entry-points."pennylane.plugins"]
-"ionq.qpu" = "pennylane_ionq:IonQDevice"
+"ionq.simulator" = "pennylane_ionq:IonQSimulatorDevice"
+"ionq.qpu" = "pennylane_ionq:IonQQPUDevice"
 
 [build-system]
 requires = ["hatchling"]
