@@ -1,0 +1,37 @@
+schema = 3
+
+[operators.gates]
+PauliX = { properties = ["invertible", "controllable", "differentiable"] }
+PauliY = { properties = ["invertible", "controllable", "differentiable"] }
+PauliZ = { properties = ["invertible", "controllable", "differentiable"] }
+Hadamard = { properties = ["invertible", "controllable", "differentiable"] }
+S = { properties = ["invertible", "controllable", "differentiable"] }
+T = { properties = ["invertible", "controllable", "differentiable"] }
+RX = { properties = ["invertible", "differentiable"] }
+RY = { properties = ["invertible", "differentiable"] }
+RZ = { properties = ["invertible", "differentiable"] }
+CNOT = { properties = ["invertible", "differentiable"] }
+
+[operators.observables]
+PauliZ = { properties = ["differentiable"] }
+Identity = { properties = ["differentiable"] }
+LinearCombination = { properties = ["differentiable"] }
+Sum = { properties = ["differentiable"] }
+SProd = { properties = ["differentiable"] }
+Prod = { properties = ["differentiable"] }
+
+[measurement_processes]
+ExpectationMP = {}
+VarianceMP = {}
+ProbabilityMP = {}
+SampleMP = { conditions = ["finiteshots"] }
+CountsMP = { conditions = ["finiteshots"] }
+
+[compilation]
+qjit_compatible = false
+runtime_code_generation = false
+dynamic_qubit_management = false
+overlapping_observables = true
+non_commuting_observables = true
+initial_state_prep = false
+supported_mcm_methods = []

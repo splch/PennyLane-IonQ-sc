@@ -1,0 +1,25 @@
+[project]
+name = "pennylane-ionq"
+version = "0.45.0"
+description = "PennyLane plugin for IonQ Quantum Cloud"
+requires-python = ">=3.11"
+dependencies = ["pennylane>=0.44", "ionq-core>=0.1"]
+
+[project.entry-points."pennylane.plugins"]
+"ionq.qpu" = "pennylane_ionq:IonQDevice"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.6", "ty"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.ty.environment]
+python-version = "3.11"
