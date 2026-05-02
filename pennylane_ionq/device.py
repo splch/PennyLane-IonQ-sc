@@ -1,5 +1,7 @@
 """PennyLane Device implementation backed by ``ionq_core``."""
 
+from __future__ import annotations
+
 import math
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
@@ -19,6 +21,7 @@ from ionq_core import (
 )
 from ionq_core.api.default import (
     create_job,
+    estimate_job_cost,
     get_job_cost,
     get_job_probabilities,
     get_variant_probabilities,
@@ -72,19 +75,21 @@ try:
 except PackageNotFoundError:
     _VERSION = "0.0.0"
 
-_OBSERVABLES = {
-    "PauliX",
-    "PauliY",
-    "PauliZ",
-    "Hadamard",
-    "Identity",
-    "Prod",
-    "SProd",
-    "Sum",
-    "LinearCombination",
-}
+_OBSERVABLES = frozenset(
+    {
+        "PauliX",
+        "PauliY",
+        "PauliZ",
+        "Hadamard",
+        "Identity",
+        "Prod",
+        "SProd",
+        "Sum",
+        "LinearCombination",
+    }
+)
 
-_QIS_GATES = {
+_QIS_GATES: dict[str, str] = {
     "Hadamard": "h",
     "PauliX": "x",
     "PauliY": "y",
@@ -105,7 +110,7 @@ _QIS_GATES = {
     "IsingZZ": "zz",
 }
 
-_NATIVE_GATES = {"GPI": "gpi", "GPI2": "gpi2", "MS": "ms", "IonQZZ": "zz"}
+_NATIVE_GATES: dict[str, str] = {"GPI": "gpi", "GPI2": "gpi2", "MS": "ms", "IonQZZ": "zz"}
 
 
 def _qis_op(op) -> GateQisGate:
@@ -136,16 +141,16 @@ def _native_op(op) -> GateNativeGate:
 
 @transform
 def _to_standard_wires(tape):
-    """Map heterogeneous wire labels onto consecutive integers ``0..n-1``."""
     return [tape.map_to_standard_wires()], null_postprocessing
 
 
-_TURN = 4 * math.pi  # RZ(theta) = GPI(0) GPI(theta/(4*pi))
+# Native-gate decompositions for every standard PennyLane gate the device must
+# accept. The decomposition graph picks these paths only when the target gate
+# set is native (GPI/GPI2/MS/IonQZZ). Phases are in turns; RZ(theta) =
+# GPI(0)·GPI(theta/4pi).
+_TURN = 4 * math.pi
 
 
-# Graph-based decomposition rules: register IonQ-native paths for every standard
-# PennyLane gate the device must accept. The graph picks our paths only when the
-# target gate set contains GPI/GPI2/MS/IonQZZ (i.e. on the native gateset).
 @register_resources({GPI2: 1, GPI: 1})
 def _native_h(wires):
     GPI2(0.25, wires=wires)
@@ -249,13 +254,15 @@ for _op_type, _decomp in (
 
 
 @transform
-def _ionq_decompose(tape, gate_set):
-    """Decompose to ``gate_set`` using the graph-based system, scoped to this call.
+def _decompose_to_gateset(tape, gate_set, native: bool):
+    """Decompose ``tape`` to ``gate_set``.
 
-    ``qml.decomposition.enable_graph`` mutates global state, so we save/restore
-    it around the underlying ``qml.transforms.decompose`` call to leave the
-    process state untouched for code outside the device.
+    Native decomposition needs the experimental graph system (our ``@register_resources``
+    decompositions are graph-only). QIS decomposition uses ``op.decomposition()`` and
+    does not touch the global graph flag.
     """
+    if not native:
+        return graph_decompose(tape, gate_set=gate_set)
     was_on = enabled_graph()
     if not was_on:
         enable_graph()
@@ -270,14 +277,50 @@ def _ionq_decompose(tape, gate_set):
             disable_graph()
 
 
-def _set(value):
+def _or_none(value):
     return None if isinstance(value, Unset) else value
+
+
+def _samples_from_probs(raw_probs: dict, n: int, shots) -> np.ndarray | tuple:
+    """Convert IonQ integer-keyed probabilities into PennyLane samples."""
+    # IonQ keys probabilities by integer state with qubit 0 as LSB; sample_probs
+    # expects qubit 0 as MSB, so reverse the bit order.
+    probs = np.zeros(2**n)
+    for key, p in raw_probs.items():
+        probs[int(format(int(key), f"0{n}b")[::-1], 2)] = p
+    total = probs.sum()
+    if total > 0:
+        probs /= total
+    samples = sample_probs(probs, shots.total_shots, n, False, None)
+    if shots.has_partitioned_shots:
+        return tuple(samples[lo:hi] for lo, hi in shots.bins())
+    return samples
 
 
 @simulator_tracking
 @single_tape_support
 class IonQDevice(Device):
-    """Base PennyLane device targeting IonQ Quantum Cloud."""
+    """PennyLane device targeting IonQ Quantum Cloud.
+
+    Args:
+        wires: Device wires (int, iterable, or ``None`` for any).
+        backend: IonQ backend identifier (e.g. ``"simulator"``, ``"qpu.aria-1"``).
+        gateset: ``"qis"`` (default; logical) or ``"native"`` (gpi/gpi2/ms/zz).
+        api_key: IonQ API key. Defaults to ``$IONQ_API_KEY``.
+        base_url: API base URL. Defaults to ``https://api.ionq.co/v0.4``.
+        job_name: Optional name attached to every submitted job.
+        compilation: ``{"opt": float, "precision": str}`` server-side compilation knobs.
+        error_mitigation: ``{"debiasing": bool}`` (debiasing requires >= 500 shots).
+        sharpen: Apply IonQ's debiasing sharpening when fetching probabilities.
+        noise: ``{"model": str, "seed": int}`` cloud-simulator noise (simulator only).
+        metadata: User metadata dict (string -> string) attached to each job.
+        session_id: Submit jobs into an existing IonQ session.
+        dry_run: If ``True``, server only validates and bills nothing.
+        timeout: HTTP request timeout in seconds.
+        max_retries: Max retries for transient HTTP failures.
+        job_timeout: Max wall-clock seconds to wait for a submitted job.
+        job_poll_interval: Initial polling interval (seconds) for ``wait_for_job``.
+    """
 
     config_filepath = str(Path(__file__).parent / "capabilities.toml")
 
@@ -295,8 +338,12 @@ class IonQDevice(Device):
         sharpen: bool | None = None,
         noise: dict | None = None,
         metadata: dict | None = None,
+        session_id: str | None = None,
+        dry_run: bool | None = None,
         timeout: float | None = None,
         max_retries: int | None = None,
+        job_timeout: float = 300.0,
+        job_poll_interval: float = 1.0,
     ) -> None:
         super().__init__(wires=wires)
         self._backend = backend
@@ -309,6 +356,10 @@ class IonQDevice(Device):
         self._sharpen = UNSET if sharpen is None else sharpen
         self._noise = Noise.from_dict(noise) if noise else UNSET
         self._metadata = JobMetadata.from_dict(metadata) if metadata else UNSET
+        self._session_id = session_id or UNSET
+        self._dry_run = UNSET if dry_run is None else dry_run
+        self._job_timeout = job_timeout
+        self._job_poll_interval = job_poll_interval
         self._client = IonQClient(
             api_key=api_key,
             base_url=base_url or "https://api.ionq.co/v0.4",
@@ -335,7 +386,11 @@ class IonQDevice(Device):
         program.add_transform(validate_measurements, name=self.name)
         program.add_transform(split_non_commuting)
         program.add_transform(measurements_from_samples)
-        program.add_transform(_ionq_decompose, gate_set=set(self._allowed.keys()))
+        program.add_transform(
+            _decompose_to_gateset,
+            gate_set=set(self._allowed.keys()),
+            native=self._gateset == "native",
+        )
         program.add_transform(broadcast_expand)
         return program
 
@@ -343,6 +398,42 @@ class IonQDevice(Device):
         if len(circuits) == 1:
             return (self._run_one(circuits[0]),)
         return self._run_many(circuits)
+
+    def estimate_cost(self, qnode_or_tape, *args, **kwargs) -> dict:
+        """Server-side cost / queue / runtime estimate.
+
+        Accepts a :class:`~pennylane.QNode` (with ``args``/``kwargs`` for its
+        parameters) or a single :class:`~pennylane.tape.QuantumScript`. Returns a
+        dict with ``cost``, ``cost_unit``, ``execution_time_s``, ``queue_time_s``,
+        and ``rate_information``.
+        """
+        if isinstance(qnode_or_tape, qml.QNode):
+            batch, _ = qml.workflow.construct_batch(qnode_or_tape, level="device")(*args, **kwargs)
+        else:
+            batch = (qnode_or_tape,)
+        if not batch:
+            raise ValueError("estimate_cost requires at least one tape")
+        shots = batch[0].shots.total_shots if batch[0].shots else 1000
+        resp = estimate_job_cost.sync(
+            client=self._client,
+            backend=self._backend,
+            qubits=max(t.num_wires for t in batch),
+            shots=shots,
+            field_1q_gates=sum(1 for t in batch for op in t.operations if len(op.wires) == 1),
+            field_2q_gates=sum(1 for t in batch for op in t.operations if len(op.wires) == 2),
+            error_mitigation=bool(self._error_mitigation),
+        )
+        if resp is None:
+            raise DeviceError(f"{self.name}: cost estimate request returned no response")
+        return {
+            "cost": resp.estimated_cost,
+            "cost_unit": resp.cost_unit,
+            "execution_time_s": resp.estimated_execution_time,
+            "queue_time_s": resp.current_predicted_queue_time,
+            "rate_information": resp.rate_information.to_dict(),
+        }
+
+    # -- internals ----------------------------------------------------------
 
     def _settings(self, settings_cls):
         if not (self._compilation or self._error_mitigation):
@@ -364,27 +455,19 @@ class IonQDevice(Device):
         n = max(tape.num_wires, 1)
         return n, [self._serialize_op(op) for op in tape.operations]
 
-    def _input(self, qubits, gates):
-        cls = NativeCircuitInput if self._gateset == "native" else QisCircuitInput
-        return cls(gateset=self._gateset, qubits=qubits, circuit=gates)
-
-    def _child(self, qubits, gates, name):
-        cls = NativeCircuit if self._gateset == "native" else QISCircuit
-        return cls(qubits=qubits, circuit=gates, name=name)
-
-    def _tape_name(self, tape, fallback=UNSET):
-        return getattr(tape, "name", None) or fallback
-
     def _run_one(self, tape):
         n, gates = self._gates(tape)
+        input_cls = NativeCircuitInput if self._gateset == "native" else QisCircuitInput
         payload = CircuitJobCreationPayload(
             type_="ionq.circuit.v1",
             backend=self._backend,
-            input_=self._input(n, gates),
+            input_=input_cls(gateset=self._gateset, qubits=n, circuit=gates),
             shots=tape.shots.total_shots,
-            name=self._tape_name(tape, self._job_name),
+            name=self._job_name,
             metadata=self._metadata,
             noise=self._noise,
+            session_id=self._session_id,
+            dry_run=self._dry_run,
             settings=self._settings(CircuitJobCreationPayloadSettings),
         )
         job_id, _ = self._submit(payload)
@@ -394,15 +477,16 @@ class IonQDevice(Device):
             )
         except APIError as err:
             raise DeviceError(f"{self.name}: fetching results failed: {err}") from err
-        return self._samples(result.additional_properties, n, tape.shots)
+        return _samples_from_probs(result.additional_properties, n, tape.shots)
 
     def _run_many(self, tapes):
         children = [self._gates(t) for t in tapes]
         max_n = max(n for n, _ in children)
+        child_cls = NativeCircuit if self._gateset == "native" else QISCircuit
         base_name = self._job_name if not isinstance(self._job_name, Unset) else "circuit"
         child_models = [
-            self._child(n, gates, name=self._tape_name(t, f"{base_name}-{i}"))
-            for i, (t, (n, gates)) in enumerate(zip(tapes, children, strict=True))
+            child_cls(qubits=n, circuit=gates, name=f"{base_name}-{i}")
+            for i, (n, gates) in enumerate(children)
         ]
         payload = JSONMultiCircuitJob(
             type_="ionq.multi-circuit.v1",
@@ -414,6 +498,8 @@ class IonQDevice(Device):
             name=self._job_name,
             metadata=self._metadata,
             noise=self._noise,
+            session_id=self._session_id,
+            dry_run=self._dry_run,
             settings=self._settings(JSONMultiCircuitJobSettings),
         )
         job_id, response = self._submit(payload)
@@ -428,13 +514,18 @@ class IonQDevice(Device):
                 )
             except APIError as err:
                 raise DeviceError(f"{self.name}: variant {variant_id} failed: {err}") from err
-            results.append(self._samples(result.additional_properties, n, tape.shots))
+            results.append(_samples_from_probs(result.additional_properties, n, tape.shots))
         return tuple(results)
 
     def _submit(self, payload):
         try:
             job = create_job.sync(client=self._client, body=payload)
-            response = wait_for_job(self._client, job.id)
+            response = wait_for_job(
+                self._client,
+                job.id,
+                timeout=self._job_timeout,
+                poll_interval=self._job_poll_interval,
+            )
         except (JobFailedError, JobTimeoutError, APIError) as err:
             raise DeviceError(f"{self.name} job failed: {err}") from err
         self._track(response)
@@ -444,46 +535,30 @@ class IonQDevice(Device):
         if not self.tracker.active:
             return
         update: dict = {"job_id": response.id}
-        for k in ("predicted_wait_time_ms", "execution_duration_ms"):
-            v = getattr(response, k, None)
-            if v is not None:
-                update[k] = v
-        stats = response.stats
         for k in (
-            "billed_quantum_compute_time_us",
-            "predicted_quantum_compute_time_us",
+            "predicted_wait_time_ms",
+            "predicted_execution_duration_ms",
+            "execution_duration_ms",
         ):
-            v = _set(getattr(stats, k, UNSET))
-            if v is not None:
+            if (v := getattr(response, k, None)) is not None:
                 update[k] = v
-        gate_counts = _set(stats.gate_counts)
-        if gate_counts is not None:
-            update["gate_counts"] = dict(gate_counts.additional_properties)
+        for k in (
+            "predicted_quantum_compute_time_us",
+            "billed_quantum_compute_time_us",
+            "kwh",
+        ):
+            if (v := _or_none(getattr(response.stats, k))) is not None:
+                update[k] = v
+        if (gc := _or_none(response.stats.gate_counts)) is not None:
+            update["gate_counts"] = dict(gc.additional_properties)
         try:
             cost_resp = get_job_cost.sync(uuid=response.id, client=self._client)
         except APIError:
             cost_resp = None
-        if cost_resp is not None:
-            cost = _set(cost_resp.cost)
-            if cost is not None:
-                update["cost"] = cost.value
-                update["cost_unit"] = cost.unit
+        if cost_resp is not None and (cost := _or_none(cost_resp.cost)) is not None:
+            update["cost"] = cost.value
+            update["cost_unit"] = cost.unit
         self.tracker.update(**update)
-
-    def _samples(self, raw_probs, n, shots):
-        # IonQ returns probabilities keyed by integer-encoded basis states with
-        # qubit 0 as the least-significant bit; PennyLane's ``sample_probs``
-        # expects the most-significant bit to correspond to wire 0.
-        probs = np.zeros(2**n)
-        for key, p in raw_probs.items():
-            probs[int(format(int(key), f"0{n}b")[::-1], 2)] = p
-        total = probs.sum()
-        if total > 0:
-            probs /= total
-        samples = sample_probs(probs, shots.total_shots, n, False, None)
-        if shots.has_partitioned_shots:
-            return tuple(samples[lo:hi] for lo, hi in shots.bins())
-        return samples
 
 
 class IonQSimulatorDevice(IonQDevice):

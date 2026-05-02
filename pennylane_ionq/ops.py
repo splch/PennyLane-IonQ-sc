@@ -1,22 +1,22 @@
-"""Custom IonQ operations exposed to PennyLane users.
+"""Native IonQ trapped-ion gates exposed to PennyLane.
 
-GPI / GPI2 / MS / IonQZZ are IonQ's native trapped-ion gates. Phase parameters
-(``phi``, ``phi0``, ``phi1``) are in turns (fractions of 2*pi); interaction
-parameters (``theta``, ``angle``) are in units of pi - matching the wire
-convention of the IonQ Cloud API and ``ionq_core.gates``.
+Phase parameters (``phi``, ``phi0``, ``phi1``) are in **turns** (fractions of
+2*pi); interaction parameters (``theta``, ``angle``) are in **units of pi** -
+matching ``ionq_core.gates`` and the IonQ Cloud API wire format.
 """
+
+from __future__ import annotations
 
 import numpy as np
 from ionq_core import gpi2_matrix, gpi_matrix, ms_matrix, zz_matrix
 from pennylane.operation import Operation
-from pennylane.ops import IsingXX as XX
-from pennylane.ops import IsingYY as YY
-from pennylane.ops import IsingZZ as ZZ
 
-__all__ = ["GPI", "GPI2", "MS", "XX", "YY", "ZZ", "IonQZZ"]
+__all__ = ["GPI", "GPI2", "MS", "IonQZZ"]
 
 
 class GPI(Operation):
+    """Single-qubit GPI gate (involutory; X at ``phi=0``)."""
+
     num_params = 1
     num_wires = 1
     grad_method = None
@@ -30,6 +30,8 @@ class GPI(Operation):
 
 
 class GPI2(Operation):
+    """Single-qubit GPI2 gate (pi/2 rotation about an XY-plane axis)."""
+
     num_params = 1
     num_wires = 1
     grad_method = None
@@ -43,6 +45,8 @@ class GPI2(Operation):
 
 
 class MS(Operation):
+    """Two-qubit Molmer-Sorensen gate; ``angle=0.25`` is maximally entangling."""
+
     num_params = 3
     num_wires = 2
     grad_method = None
