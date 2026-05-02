@@ -428,7 +428,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "ionq-core", specifier = ">=0.1" },
+    { name = "ionq-core", specifier = "~=0.1.0" },
     { name = "pennylane", specifier = ">=0.44" },
 ]
 

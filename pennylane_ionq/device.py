@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import math
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
@@ -144,59 +145,69 @@ def _to_standard_wires(tape):
     return [tape.map_to_standard_wires()], null_postprocessing
 
 
-# Native-gate decompositions for every standard PennyLane gate the device must
-# accept. The decomposition graph picks these paths only when the target gate
-# set is native (GPI/GPI2/MS/IonQZZ). Phases are in turns; RZ(theta) =
-# GPI(0)·GPI(theta/4pi).
+# Native-gate decompositions for standard PennyLane gates. Phases are in
+# turns; RZ(theta) = GPI(0)·GPI(theta/4pi). Used only when the target gate
+# set is native (GPI/GPI2/MS/IonQZZ).
 _TURN = 4 * math.pi
 
 
-@register_resources({GPI2: 1, GPI: 1})
+def _native(op_type, resources):
+    """Register `fn` as a graph decomposition rule for `op_type`."""
+
+    def wrap(fn):
+        rule = register_resources(resources)(fn)
+        add_decomps(op_type, rule)
+        return rule
+
+    return wrap
+
+
+@_native(qml.Hadamard, {GPI2: 1, GPI: 1})
 def _native_h(wires):
     GPI2(0.25, wires=wires)
     GPI(0, wires=wires)
 
 
-@register_resources({GPI: 1})
+@_native(qml.PauliX, {GPI: 1})
 def _native_x(wires):
     GPI(0, wires=wires)
 
 
-@register_resources({GPI: 1})
+@_native(qml.PauliY, {GPI: 1})
 def _native_y(wires):
     GPI(0.25, wires=wires)
 
 
-@register_resources({GPI: 2})
+@_native(qml.PauliZ, {GPI: 2})
 def _native_z(wires):
     GPI(0, wires=wires)
     GPI(0.25, wires=wires)
 
 
-@register_resources({GPI: 2})
+@_native(qml.S, {GPI: 2})
 def _native_s(wires):
     GPI(0, wires=wires)
     GPI(0.125, wires=wires)
 
 
-@register_resources({GPI: 2})
+@_native(qml.T, {GPI: 2})
 def _native_t(wires):
     GPI(0, wires=wires)
     GPI(0.0625, wires=wires)
 
 
-@register_resources({GPI2: 1})
+@_native(qml.SX, {GPI2: 1})
 def _native_sx(wires):
     GPI2(0, wires=wires)
 
 
-@register_resources({GPI: 2})
+@_native(qml.RZ, {GPI: 2})
 def _native_rz(theta, wires):
     GPI(0, wires=wires)
     GPI(theta / _TURN, wires=wires)
 
 
-@register_resources({GPI2: 2, GPI: 2})
+@_native(qml.RX, {GPI2: 2, GPI: 2})
 def _native_rx(theta, wires):
     GPI2(-0.25, wires=wires)
     GPI(0, wires=wires)
@@ -204,7 +215,7 @@ def _native_rx(theta, wires):
     GPI2(0.25, wires=wires)
 
 
-@register_resources({GPI2: 2, GPI: 2})
+@_native(qml.RY, {GPI2: 2, GPI: 2})
 def _native_ry(theta, wires):
     GPI2(0.5, wires=wires)
     GPI(0, wires=wires)
@@ -212,84 +223,66 @@ def _native_ry(theta, wires):
     GPI2(0, wires=wires)
 
 
-@register_resources({IonQZZ: 1})
+@_native(qml.IsingZZ, {IonQZZ: 1})
 def _native_isingzz(theta, wires):
     IonQZZ(theta / (2 * math.pi), wires=wires)
 
 
-@register_resources({GPI: 2})
+@_native("Adjoint(S)", {GPI: 2})
 def _native_s_dagger(wires, **_):
     GPI(0.125, wires=wires)
     GPI(0, wires=wires)
 
 
-@register_resources({GPI: 2})
+@_native("Adjoint(T)", {GPI: 2})
 def _native_t_dagger(wires, **_):
     GPI(0.0625, wires=wires)
     GPI(0, wires=wires)
 
 
-@register_resources({GPI2: 1})
+@_native("Adjoint(SX)", {GPI2: 1})
 def _native_sx_dagger(wires, **_):
     GPI2(0.5, wires=wires)
 
 
-for _op_type, _decomp in (
-    (qml.Hadamard, _native_h),
-    (qml.PauliX, _native_x),
-    (qml.PauliY, _native_y),
-    (qml.PauliZ, _native_z),
-    (qml.S, _native_s),
-    (qml.T, _native_t),
-    (qml.SX, _native_sx),
-    (qml.RZ, _native_rz),
-    (qml.RX, _native_rx),
-    (qml.RY, _native_ry),
-    (qml.IsingZZ, _native_isingzz),
-    ("Adjoint(S)", _native_s_dagger),
-    ("Adjoint(T)", _native_t_dagger),
-    ("Adjoint(SX)", _native_sx_dagger),
-):
-    add_decomps(_op_type, _decomp)
+@contextlib.contextmanager
+def _graph_enabled():
+    if enabled_graph():
+        yield
+        return
+    enable_graph()
+    try:
+        yield
+    finally:
+        disable_graph()
 
 
 @transform
 def _decompose_to_gateset(tape, gate_set, native: bool):
     """Decompose ``tape`` to ``gate_set``.
 
-    Native decomposition needs the experimental graph system (our ``@register_resources``
-    decompositions are graph-only). QIS decomposition uses ``op.decomposition()`` and
-    does not touch the global graph flag.
+    Native decomposition uses our ``@register_resources`` rules, which only
+    fire under the experimental graph system. QIS decomposition falls back
+    to ``op.decomposition()`` and works either way.
     """
     if not native:
         return graph_decompose(tape, gate_set=gate_set)
-    was_on = enabled_graph()
-    if not was_on:
-        enable_graph()
-    try:
+    with _graph_enabled():
         return graph_decompose(
-            tape,
-            gate_set=gate_set,
-            fixed_decomps={qml.GlobalPhase: null_decomp},
+            tape, gate_set=gate_set, fixed_decomps={qml.GlobalPhase: null_decomp}
         )
-    finally:
-        if not was_on:
-            disable_graph()
-
-
-def _or_none(value):
-    return None if isinstance(value, Unset) else value
 
 
 def _samples_from_probs(raw_probs: dict, n: int, shots) -> np.ndarray | tuple:
-    """Convert IonQ integer-keyed probabilities into PennyLane samples."""
-    # IonQ keys probabilities by integer state with qubit 0 as LSB; sample_probs
-    # expects qubit 0 as MSB, so reverse the bit order.
+    """Convert IonQ integer-keyed probabilities into PennyLane samples.
+
+    IonQ keys probabilities by integer state with qubit 0 as LSB; ``sample_probs``
+    expects qubit 0 as MSB, so reverse the bit order.
+    """
     probs = np.zeros(2**n)
     for key, p in raw_probs.items():
         probs[int(format(int(key), f"0{n}b")[::-1], 2)] = p
-    total = probs.sum()
-    if total > 0:
+    if (total := probs.sum()) > 0:
         probs /= total
     samples = sample_probs(probs, shots.total_shots, n, False, None)
     if shots.has_partitioned_shots:
@@ -380,7 +373,7 @@ class IonQDevice(Device):
         program.add_transform(_to_standard_wires)
         program.add_transform(
             validate_observables,
-            stopping_condition=lambda obs: obs.name in _OBSERVABLES,
+            stopping_condition=_OBSERVABLES.__contains__,
             name=self.name,
         )
         program.add_transform(validate_measurements, name=self.name)
@@ -388,7 +381,7 @@ class IonQDevice(Device):
         program.add_transform(measurements_from_samples)
         program.add_transform(
             _decompose_to_gateset,
-            gate_set=set(self._allowed.keys()),
+            gate_set=set(self._allowed),
             native=self._gateset == "native",
         )
         program.add_transform(broadcast_expand)
@@ -440,16 +433,26 @@ class IonQDevice(Device):
             return UNSET
         return settings_cls(
             compilation=(
-                CircuitJobCreationPayloadSettingsCompilation.from_dict(self._compilation)
+                CircuitJobCreationPayloadSettingsCompilation(**self._compilation)
                 if self._compilation
                 else UNSET
             ),
             error_mitigation=(
-                CircuitJobCreationPayloadSettingsErrorMitigation.from_dict(self._error_mitigation)
+                CircuitJobCreationPayloadSettingsErrorMitigation(**self._error_mitigation)
                 if self._error_mitigation
                 else UNSET
             ),
         )
+
+    def _common_kwargs(self) -> dict:
+        return {
+            "backend": self._backend,
+            "name": self._job_name,
+            "metadata": self._metadata,
+            "noise": self._noise,
+            "session_id": self._session_id,
+            "dry_run": self._dry_run,
+        }
 
     def _gates(self, tape) -> tuple[int, list]:
         n = max(tape.num_wires, 1)
@@ -460,15 +463,10 @@ class IonQDevice(Device):
         input_cls = NativeCircuitInput if self._gateset == "native" else QisCircuitInput
         payload = CircuitJobCreationPayload(
             type_="ionq.circuit.v1",
-            backend=self._backend,
             input_=input_cls(gateset=self._gateset, qubits=n, circuit=gates),
             shots=tape.shots.total_shots,
-            name=self._job_name,
-            metadata=self._metadata,
-            noise=self._noise,
-            session_id=self._session_id,
-            dry_run=self._dry_run,
             settings=self._settings(CircuitJobCreationPayloadSettings),
+            **self._common_kwargs(),
         )
         job_id, _ = self._submit(payload)
         try:
@@ -490,17 +488,12 @@ class IonQDevice(Device):
         ]
         payload = JSONMultiCircuitJob(
             type_="ionq.multi-circuit.v1",
-            backend=self._backend,
             input_=JsonMultiCircuitInput(
                 gateset=self._gateset, qubits=max_n, circuits=child_models
             ),
             shots=tapes[0].shots.total_shots,
-            name=self._job_name,
-            metadata=self._metadata,
-            noise=self._noise,
-            session_id=self._session_id,
-            dry_run=self._dry_run,
             settings=self._settings(JSONMultiCircuitJobSettings),
+            **self._common_kwargs(),
         )
         job_id, response = self._submit(payload)
         child_ids = response.child_job_ids or []
@@ -534,28 +527,27 @@ class IonQDevice(Device):
     def _track(self, response):
         if not self.tracker.active:
             return
+        s = response.stats
         update: dict = {"job_id": response.id}
-        for k in (
-            "predicted_wait_time_ms",
-            "predicted_execution_duration_ms",
-            "execution_duration_ms",
+        for src, k in (
+            (response, "predicted_wait_time_ms"),
+            (response, "predicted_execution_duration_ms"),
+            (response, "execution_duration_ms"),
+            (s, "predicted_quantum_compute_time_us"),
+            (s, "billed_quantum_compute_time_us"),
+            (s, "kwh"),
         ):
-            if (v := getattr(response, k, None)) is not None:
+            v = getattr(src, k, None)
+            if v is not None and not isinstance(v, Unset):
                 update[k] = v
-        for k in (
-            "predicted_quantum_compute_time_us",
-            "billed_quantum_compute_time_us",
-            "kwh",
-        ):
-            if (v := _or_none(getattr(response.stats, k))) is not None:
-                update[k] = v
-        if (gc := _or_none(response.stats.gate_counts)) is not None:
+        gc = getattr(s, "gate_counts", None)
+        if gc is not None and not isinstance(gc, Unset):
             update["gate_counts"] = dict(gc.additional_properties)
         try:
             cost_resp = get_job_cost.sync(uuid=response.id, client=self._client)
         except APIError:
             cost_resp = None
-        if cost_resp is not None and (cost := _or_none(cost_resp.cost)) is not None:
+        if cost_resp is not None and not isinstance(cost := cost_resp.cost, Unset):
             update["cost"] = cost.value
             update["cost_unit"] = cost.unit
         self.tracker.update(**update)
