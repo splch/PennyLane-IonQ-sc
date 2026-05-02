@@ -36,9 +36,9 @@ from pennylane import transform
 from pennylane.devices.preprocess import null_postprocessing
 from pennylane.devices.qubit.sampling import sample_probs
 
-# PennyLane op name -> (ionq-core gate model class, gate literal). Op data
-# (rotation) is forwarded automatically when the model accepts it; CNOT is
-# the one shape exception (split target/control).
+# PennyLane op name -> (ionq-core gate model class, gate literal). The model
+# classes require ``gate=`` explicitly (the ``Literal["..."]`` annotation is a
+# type hint, not a default). CNOT splits target/control onto separate fields.
 _QIS_GATES: dict[str, tuple[type, str]] = {
     "Hadamard": (GateH, "h"),
     "PauliX": (GateX, "x"),
@@ -63,9 +63,6 @@ _QIS_GATES: dict[str, tuple[type, str]] = {
 
 _NATIVE_GATES: dict[str, str] = {"GPI": "gpi", "GPI2": "gpi2", "MS": "ms", "IonQZZ": "zz"}
 
-# Tolerance for treating PauliSentence coefficients as real.
-_PAULIEXP_IMAG_ATOL = 1e-12
-
 
 def _pauliexp_op(op) -> GatePauliexp | None:
     """Serialize :class:`pennylane.ops.op_math.Evolution` to IonQ ``pauliexp``.
@@ -74,37 +71,30 @@ def _pauliexp_op(op) -> GatePauliexp | None:
     :math:`e^{-i \\, time \\sum_j c_j P_j}`. The schema requires ``time > 0``,
     so a negative ``t`` is folded into the sign of every coefficient; ``t == 0``
     is the identity and emits no gate. Identity-only Pauli words contribute
-    only a global phase and are dropped.
-
-    Pauli strings are big-endian over ``targets``: ``terms[k][i]`` acts on
-    ``targets[i]``.
+    only a global phase and are dropped. Pauli strings are big-endian over
+    ``targets``: ``terms[k][i]`` acts on ``targets[i]``.
     """
     sentence = op.base.pauli_rep
     if sentence is None:
         raise ValueError(
-            f"{op.name}: pauliexp requires a generator with a Pauli "
-            f"decomposition (got {op.base!r}). Express the generator as a "
-            "LinearCombination of Pauli words."
+            f"{op.name}: pauliexp requires a generator with a Pauli decomposition "
+            f"(got {op.base!r})."
         )
-
     targets = list(op.wires)
-    terms: list[str] = []
-    coefficients: list[float] = []
+    terms, coefficients = [], []
     for word, coeff in sentence.items():
         if not word:
             continue
         c = complex(coeff)
-        if abs(c.imag) > _PAULIEXP_IMAG_ATOL:
+        if abs(c.imag) > 1e-12:
             raise ValueError(f"{op.name}: pauliexp requires real Pauli coefficients (got {coeff}).")
         terms.append("".join(word.get(w, "I") for w in targets))
         coefficients.append(c.real)
-
     time = float(op.data[0])
     if not terms or time == 0:
         return None
     if time < 0:
-        time = -time
-        coefficients = [-c for c in coefficients]
+        time, coefficients = -time, [-c for c in coefficients]
     return GatePauliexp(
         gate="pauliexp", targets=targets, terms=terms, coefficients=coefficients, time=time
     )

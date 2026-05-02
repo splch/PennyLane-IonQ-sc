@@ -36,10 +36,13 @@ Sum = { properties = ["differentiable"] }
 SProd = { properties = ["differentiable"] }
 Prod = { properties = ["differentiable"] }
 
+# IonQ Cloud only returns shot-sampled probabilities; analytic execution
+# is not supported. Marking every MP finite-shot lets the base device's
+# ``validate_measurements`` reject ``shots=None`` automatically.
 [measurement_processes]
-ExpectationMP = {}
-VarianceMP = {}
-ProbabilityMP = {}
+ExpectationMP = { conditions = ["finiteshots"] }
+VarianceMP = { conditions = ["finiteshots"] }
+ProbabilityMP = { conditions = ["finiteshots"] }
 SampleMP = { conditions = ["finiteshots"] }
 CountsMP = { conditions = ["finiteshots"] }
 
@@ -48,5 +51,6 @@ qjit_compatible = false
 runtime_code_generation = false
 dynamic_qubit_management = false
 overlapping_observables = true
-non_commuting_observables = true
+non_commuting_observables = false
 initial_state_prep = false
+supported_mcm_methods = []

@@ -119,14 +119,18 @@ def _native_sx_dagger(wires, **_):
     GPI2(0.5, wires=wires)
 
 
+# GlobalPhase is irrelevant for samples; pre-register so callers don't need
+# to pass ``fixed_decomps={qml.GlobalPhase: null_decomp}`` to ``decompose``.
+add_decomps(qml.GlobalPhase, null_decomp)
+
+
 @transform
 def _decompose_native(tape, gate_set):
     """Decompose ``tape`` to the IonQ native gate set, enabling graph mode if needed."""
     was_enabled = enabled_graph()
-    if not was_enabled:
-        enable_graph()
+    enable_graph()
     try:
-        return decompose(tape, gate_set=gate_set, fixed_decomps={qml.GlobalPhase: null_decomp})
+        return decompose(tape, gate_set=gate_set)
     finally:
         if not was_enabled:
             disable_graph()

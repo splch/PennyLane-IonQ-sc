@@ -10,13 +10,7 @@ from typing import Literal
 
 import httpx
 import pennylane as qml
-from ionq_core import (
-    UNSET,
-    IonQClient,
-    IonQError,
-    Unset,
-    wait_for_job,
-)
+from ionq_core import UNSET, IonQClient, IonQError, Unset, wait_for_job
 from ionq_core.api.default import (
     create_job,
     estimate_job_cost,
@@ -25,13 +19,13 @@ from ionq_core.api.default import (
 )
 from ionq_core.models import (
     CircuitJobCreationPayload,
-    CircuitJobCreationPayloadSettings,
-    CircuitJobCreationPayloadSettingsCompilation,
-    CircuitJobCreationPayloadSettingsErrorMitigation,
+    CircuitJobCreationPayloadSettings as _Settings,
+    CircuitJobCreationPayloadSettingsCompilation as _Compilation,
+    CircuitJobCreationPayloadSettingsErrorMitigation as _ErrorMitigation,
     JobMetadata,
     JsonMultiCircuitInput,
     JSONMultiCircuitJob,
-    JSONMultiCircuitJobSettings,
+    JSONMultiCircuitJobSettings as _MultiSettings,
     NativeCircuit,
     NativeCircuitInput,
     Noise,
@@ -40,44 +34,16 @@ from ionq_core.models import (
 )
 from pennylane.devices import Device, ExecutionConfig
 from pennylane.devices.modifiers import simulator_tracking, single_tape_support
-from pennylane.devices.preprocess import (
-    measurements_from_samples,
-    no_analytic,
-    validate_device_wires,
-    validate_measurements,
-    validate_observables,
-)
+from pennylane.devices.preprocess import measurements_from_samples
 from pennylane.exceptions import DeviceError
-from pennylane.transforms import broadcast_expand, decompose, split_non_commuting
 
 from .decompositions import _decompose_native
-from .serialize import (
-    _NATIVE_GATES,
-    _QIS_GATES,
-    _native_op,
-    _qis_op,
-    _samples_from_probs,
-    _to_standard_wires,
-)
+from .serialize import _NATIVE_GATES, _native_op, _qis_op, _samples_from_probs, _to_standard_wires
 
 try:
     _VERSION = version("pennylane-ionq")
 except PackageNotFoundError:
     _VERSION = "0.0.0"
-
-_OBSERVABLES = frozenset(
-    {
-        "PauliX",
-        "PauliY",
-        "PauliZ",
-        "Hadamard",
-        "Identity",
-        "Prod",
-        "SProd",
-        "Sum",
-        "LinearCombination",
-    }
-)
 
 
 @simulator_tracking
@@ -132,17 +98,18 @@ class IonQDevice(Device):
         self._backend = backend
         self._gateset = gateset
         self._serialize_op = _native_op if gateset == "native" else _qis_op
-        self._allowed = _NATIVE_GATES if gateset == "native" else _QIS_GATES
-        self._job_name = job_name or UNSET
         self._compilation = compilation
         self._error_mitigation = error_mitigation
-        self._sharpen = UNSET if sharpen is None else sharpen
-        self._noise = Noise.from_dict(noise) if noise else UNSET
-        self._metadata = JobMetadata.from_dict(metadata) if metadata else UNSET
-        self._session_id = session_id or UNSET
-        self._dry_run = UNSET if dry_run is None else dry_run
         self._job_timeout = job_timeout
         self._job_poll_interval = job_poll_interval
+        # Coalesce optional kwargs to the ``UNSET`` sentinel so that omitted
+        # fields are dropped from the JSON payload (vs. sent as ``null``).
+        self._job_name = UNSET if job_name is None else job_name
+        self._sharpen = UNSET if sharpen is None else sharpen
+        self._dry_run = UNSET if dry_run is None else dry_run
+        self._session_id = UNSET if session_id is None else session_id
+        self._noise = Noise.from_dict(noise) if noise else UNSET
+        self._metadata = JobMetadata.from_dict(metadata) if metadata else UNSET
         self._client = IonQClient(
             api_key=api_key,
             base_url=base_url or "https://api.ionq.co/v0.4",
@@ -156,23 +123,11 @@ class IonQDevice(Device):
         return f"ionq.{self._backend}"
 
     def preprocess_transforms(self, execution_config: ExecutionConfig | None = None):
-        program = qml.CompilePipeline()
-        program.add_transform(no_analytic, name=self.name)
-        program.add_transform(validate_device_wires, self.wires, name=self.name)
-        program.add_transform(
-            validate_observables,
-            stopping_condition=lambda obs: obs.name in _OBSERVABLES,
-            name=self.name,
-        )
-        program.add_transform(validate_measurements, name=self.name)
-        program.add_transform(split_non_commuting)
+        program = super().preprocess_transforms(execution_config)
         program.add_transform(measurements_from_samples)
         program.add_transform(_to_standard_wires)
         if self._gateset == "native":
-            program.add_transform(_decompose_native, gate_set=set(self._allowed))
-        else:
-            program.add_transform(decompose, gate_set=set(self._allowed))
-        program.add_transform(broadcast_expand)
+            program.add_transform(_decompose_native, gate_set=set(_NATIVE_GATES))
         return program
 
     def execute(self, circuits, execution_config: ExecutionConfig | None = None):
@@ -194,14 +149,20 @@ class IonQDevice(Device):
             batch = (qnode_or_tape,)
         if not batch:
             raise ValueError("estimate_cost requires at least one tape")
-        shots = batch[0].shots.total_shots if batch[0].shots else 1000
+        n_1q = n_2q = 0
+        for tape in batch:
+            for op in tape.operations:
+                if len(op.wires) == 1:
+                    n_1q += 1
+                elif len(op.wires) == 2:
+                    n_2q += 1
         resp = estimate_job_cost.sync(
             client=self._client,
             backend=self._backend,
             qubits=max(t.num_wires for t in batch),
-            shots=shots,
-            field_1q_gates=sum(1 for t in batch for op in t.operations if len(op.wires) == 1),
-            field_2q_gates=sum(1 for t in batch for op in t.operations if len(op.wires) == 2),
+            shots=batch[0].shots.total_shots if batch[0].shots else 1000,
+            field_1q_gates=n_1q,
+            field_2q_gates=n_2q,
             error_mitigation=bool(self._error_mitigation),
         )
         if resp is None:
@@ -219,11 +180,11 @@ class IonQDevice(Device):
     def _settings(self, settings_cls):
         if not (self._compilation or self._error_mitigation):
             return UNSET
-        Comp = CircuitJobCreationPayloadSettingsCompilation
-        Mit = CircuitJobCreationPayloadSettingsErrorMitigation
         return settings_cls(
-            compilation=Comp(**self._compilation) if self._compilation else UNSET,
-            error_mitigation=Mit(**self._error_mitigation) if self._error_mitigation else UNSET,
+            compilation=_Compilation(**self._compilation) if self._compilation else UNSET,
+            error_mitigation=_ErrorMitigation(**self._error_mitigation)
+            if self._error_mitigation
+            else UNSET,
         )
 
     def _common_kwargs(self) -> dict:
@@ -238,8 +199,7 @@ class IonQDevice(Device):
 
     def _gates(self, tape) -> tuple[int, list]:
         n = max(tape.num_wires, 1)
-        gates = (self._serialize_op(op) for op in tape.operations)
-        return n, [g for g in gates if g is not None]
+        return n, [g for op in tape.operations if (g := self._serialize_op(op)) is not None]
 
     def _run_one(self, tape):
         n, gates = self._gates(tape)
@@ -248,7 +208,7 @@ class IonQDevice(Device):
             type_="ionq.circuit.v1",
             input_=input_cls(gateset=self._gateset, qubits=n, circuit=gates),
             shots=tape.shots.total_shots,
-            settings=self._settings(CircuitJobCreationPayloadSettings),
+            settings=self._settings(_Settings),
             **self._common_kwargs(),
         )
         job_id, _ = self._submit(payload)
@@ -258,9 +218,13 @@ class IonQDevice(Device):
         children = [self._gates(t) for t in tapes]
         max_n = max(n for n, _ in children)
         child_cls = NativeCircuit if self._gateset == "native" else QISCircuit
-        base_name = self._job_name if not isinstance(self._job_name, Unset) else "circuit"
+        unset_name = isinstance(self._job_name, Unset)
         child_models = [
-            child_cls(qubits=n, circuit=gates, name=f"{base_name}-{i}")
+            child_cls(
+                qubits=n,
+                circuit=gates,
+                name=UNSET if unset_name else f"{self._job_name}-{i}",
+            )
             for i, (n, gates) in enumerate(children)
         ]
         payload = JSONMultiCircuitJob(
@@ -269,15 +233,13 @@ class IonQDevice(Device):
                 gateset=self._gateset, qubits=max_n, circuits=child_models
             ),
             shots=tapes[0].shots.total_shots,
-            settings=self._settings(JSONMultiCircuitJobSettings),
+            settings=self._settings(_MultiSettings),
             **self._common_kwargs(),
         )
         _, response = self._submit(payload)
         child_ids = response.child_job_ids or []
         if len(child_ids) != len(tapes):
             raise DeviceError(f"{self.name}: expected {len(tapes)} children, got {len(child_ids)}")
-        # child_job_ids are standalone job UUIDs; fetch each child's
-        # probabilities via the per-job endpoint (children complete with parent).
         return tuple(
             self._fetch_samples(cid, n, tape.shots)
             for cid, tape, (n, _) in zip(child_ids, tapes, children, strict=True)
@@ -290,6 +252,8 @@ class IonQDevice(Device):
             )
         except IonQError as err:
             raise DeviceError(f"{self.name}: fetching {job_id} failed: {err}") from err
+        if result is None:
+            raise DeviceError(f"{self.name}: fetching {job_id} returned no response")
         return _samples_from_probs(result.additional_properties, n, shots)
 
     def _submit(self, payload):
@@ -310,26 +274,24 @@ class IonQDevice(Device):
         if not self.tracker.active:
             return
         s = response.stats
-        update: dict = {"job_id": response.id}
-        for k, v in {
+        fields = {
+            "job_id": response.id,
             "predicted_wait_time_ms": response.predicted_wait_time_ms,
             "predicted_execution_duration_ms": response.predicted_execution_duration_ms,
             "execution_duration_ms": response.execution_duration_ms,
             "predicted_quantum_compute_time_us": s.predicted_quantum_compute_time_us,
             "billed_quantum_compute_time_us": s.billed_quantum_compute_time_us,
             "kwh": s.kwh,
-        }.items():
-            if v is not None and not isinstance(v, Unset):
-                update[k] = v
+        }
+        update = {k: v for k, v in fields.items() if v is not None and not isinstance(v, Unset)}
         if not isinstance(s.gate_counts, Unset):
             update["gate_counts"] = dict(s.gate_counts.additional_properties)
         try:
             cost_resp = get_job_cost.sync(uuid=response.id, client=self._client)
         except IonQError:
             cost_resp = None
-        if cost_resp is not None and not isinstance(cost := cost_resp.cost, Unset):
-            update["cost"] = cost.value
-            update["cost_unit"] = cost.unit
+        if cost_resp and not isinstance(cost := cost_resp.cost, Unset):
+            update["cost"], update["cost_unit"] = cost.value, cost.unit
         self.tracker.update(**update)
 
 
