@@ -1,4 +1,6 @@
-"""PennyLane Device implementation backed by ``ionq_core``."""
+# Copyright 2019 Xanadu Quantum Technologies Inc.
+# SPDX-License-Identifier: Apache-2.0
+"""PennyLane device backed by the ``ionq_core`` REST client."""
 
 from __future__ import annotations
 
@@ -179,12 +181,12 @@ class IonQDevice(Device):
         return self._run_many(circuits)
 
     def estimate_cost(self, qnode_or_tape, *args, **kwargs) -> dict:
-        """Server-side cost / queue / runtime estimate.
+        """Server-side estimate of cost, queue time, runtime, and rate info.
 
-        Accepts a :class:`~pennylane.QNode` (with ``args``/``kwargs`` for its
-        parameters) or a single :class:`~pennylane.tape.QuantumScript`. Returns a
-        dict with ``cost``, ``cost_unit``, ``execution_time_s``, ``queue_time_s``,
-        and ``rate_information``.
+        Accepts a :class:`~pennylane.QNode` (with its ``args``/``kwargs``) or a
+        :class:`~pennylane.tape.QuantumScript`. Returns a dict with ``cost``,
+        ``cost_unit``, ``execution_time_s``, ``queue_time_s``, and
+        ``rate_information``.
         """
         if isinstance(qnode_or_tape, qml.QNode):
             batch, _ = qml.workflow.construct_batch(qnode_or_tape, level="device")(*args, **kwargs)
@@ -332,14 +334,24 @@ class IonQDevice(Device):
 
 
 class IonQSimulatorDevice(IonQDevice):
-    """IonQ noiseless / noisy state-vector simulator."""
+    """IonQ cloud state-vector simulator (registered as ``ionq.simulator``).
+
+    Runs noiselessly by default; pass ``noise={"model": "<backend>"}`` to
+    emulate the noise profile of a specific QPU. See
+    :class:`IonQDevice` for the full keyword reference.
+    """
 
     def __init__(self, wires=None, **kwargs):
         super().__init__(wires=wires, backend="simulator", **kwargs)
 
 
 class IonQQPUDevice(IonQDevice):
-    """IonQ trapped-ion QPU (Aria / Forte / Forte-Enterprise)."""
+    """IonQ trapped-ion QPU (registered as ``ionq.qpu``).
+
+    The ``backend`` keyword selects a specific QPU -- ``"aria-1"`` (default),
+    ``"aria-2"``, ``"forte-1"``, ``"forte-enterprise-1"`` / ``-2`` / ``-3``,
+    or ``"tempo-1"``. See :class:`IonQDevice` for the full keyword reference.
+    """
 
     def __init__(self, wires=None, *, backend: str = "aria-1", **kwargs):
         super().__init__(wires=wires, backend=f"qpu.{backend}", **kwargs)

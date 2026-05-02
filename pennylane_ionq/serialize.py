@@ -1,8 +1,10 @@
+# Copyright 2019 Xanadu Quantum Technologies Inc.
+# SPDX-License-Identifier: Apache-2.0
 """Serialization between PennyLane ops and the ionq-core wire format.
 
-Per-gate translators convert :class:`~pennylane.operation.Operation` instances
-to :mod:`ionq_core.models` payload objects. The probabilities-to-samples
-helper closes the loop on the result side.
+Per-gate translators convert PennyLane :class:`~pennylane.operation.Operation`
+instances to :mod:`ionq_core.models` payload objects;
+:func:`_samples_from_probs` converts cloud results back to PennyLane samples.
 """
 
 from __future__ import annotations

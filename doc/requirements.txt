@@ -1,0 +1,5 @@
+sphinx>=8.1
+sphinx-automodapi>=0.19
+pennylane-sphinx-theme
+pennylane>=0.44
+ionq-core

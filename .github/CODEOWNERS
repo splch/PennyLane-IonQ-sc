@@ -1,0 +1,12 @@
+# Default code owners for the PennyLane-IonQ plugin
+*       @ionq @PennyLaneAI
+
+# Devices and serialization
+/pennylane_ionq/        @ionq
+
+# Documentation
+/doc/                   @ionq @PennyLaneAI
+
+# CI / packaging
+/.github/               @ionq
+/pyproject.toml         @ionq

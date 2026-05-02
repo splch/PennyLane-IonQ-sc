@@ -1,9 +1,10 @@
+# Copyright 2019 Xanadu Quantum Technologies Inc.
+# SPDX-License-Identifier: Apache-2.0
 """Native-gate decompositions for standard PennyLane gates.
 
-Importing this module registers decomposition rules with PennyLane's graph
-decomposition system via ``add_decomps``. Phases are in turns;
-``RZ(theta) = GPI(0) * GPI(theta/4pi)``. Used only when the device's target
-gate set is native (GPI/GPI2/MS/IonQZZ).
+Registers rules with PennyLane's graph decomposition system. Phases are in
+turns (e.g. ``RZ(theta) = GPI(0) * GPI(theta/4pi)``). Used only when the
+device's gate set is ``"native"``.
 """
 
 from __future__ import annotations
@@ -120,11 +121,7 @@ def _native_sx_dagger(wires, **_):
 
 @transform
 def _decompose_native(tape, gate_set):
-    """Decompose ``tape`` to the IonQ native gate set under graph mode.
-
-    Native decomps are registered via ``add_decomps`` (graph mode); enable
-    graph mode locally so PennyLane consults them.
-    """
+    """Decompose ``tape`` to the IonQ native gate set, enabling graph mode if needed."""
     was_enabled = enabled_graph()
     if not was_enabled:
         enable_graph()

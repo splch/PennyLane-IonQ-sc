@@ -1,8 +1,10 @@
+# Copyright 2019 Xanadu Quantum Technologies Inc.
+# SPDX-License-Identifier: Apache-2.0
 """Native IonQ trapped-ion gates exposed to PennyLane.
 
-Phase parameters (``phi``, ``phi0``, ``phi1``) are in **turns** (fractions of
-2*pi); interaction parameters (``theta``, ``angle``) are in **units of pi** -
-matching ``ionq_core.gates`` and the IonQ Cloud API wire format.
+Phases (``phi``, ``phi0``, ``phi1``) are in **turns**; interaction
+parameters (``theta``, ``angle``) are in **units of pi**. Matches
+``ionq_core.gates`` and the IonQ Cloud wire format.
 """
 
 from __future__ import annotations
@@ -45,7 +47,7 @@ class GPI2(Operation):
 
 
 class MS(Operation):
-    """Two-qubit Molmer-Sorensen gate; ``angle=0.25`` is maximally entangling."""
+    """Two-qubit Molmer-Sorensen gate; ``theta=0.25`` is maximally entangling."""
 
     num_params = 3
     num_wires = 2
