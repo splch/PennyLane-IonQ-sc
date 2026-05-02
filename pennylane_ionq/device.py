@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
 import math
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
@@ -306,23 +305,21 @@ def _native_sx_dagger(wires, **_):
     GPI2(0.5, wires=wires)
 
 
-@contextlib.contextmanager
-def _graph_enabled():
-    if enabled_graph():
-        yield
-        return
-    enable_graph()
-    try:
-        yield
-    finally:
-        disable_graph()
-
-
 @transform
 def _decompose_native(tape, gate_set):
-    """Decompose ``tape`` to the IonQ native gate set under graph mode."""
-    with _graph_enabled():
+    """Decompose ``tape`` to the IonQ native gate set under graph mode.
+
+    Native decomps are registered via ``add_decomps`` (graph mode); enable
+    graph mode locally so PennyLane consults them.
+    """
+    was_enabled = enabled_graph()
+    if not was_enabled:
+        enable_graph()
+    try:
         return decompose(tape, gate_set=gate_set, fixed_decomps={qml.GlobalPhase: null_decomp})
+    finally:
+        if not was_enabled:
+            disable_graph()
 
 
 def _samples_from_probs(raw_probs: dict, n: int, shots) -> np.ndarray | tuple:
@@ -481,17 +478,11 @@ class IonQDevice(Device):
     def _settings(self, settings_cls):
         if not (self._compilation or self._error_mitigation):
             return UNSET
+        Comp = CircuitJobCreationPayloadSettingsCompilation
+        Mit = CircuitJobCreationPayloadSettingsErrorMitigation
         return settings_cls(
-            compilation=(
-                CircuitJobCreationPayloadSettingsCompilation(**self._compilation)
-                if self._compilation
-                else UNSET
-            ),
-            error_mitigation=(
-                CircuitJobCreationPayloadSettingsErrorMitigation(**self._error_mitigation)
-                if self._error_mitigation
-                else UNSET
-            ),
+            compilation=Comp(**self._compilation) if self._compilation else UNSET,
+            error_mitigation=Mit(**self._error_mitigation) if self._error_mitigation else UNSET,
         )
 
     def _common_kwargs(self) -> dict:
@@ -520,13 +511,7 @@ class IonQDevice(Device):
             **self._common_kwargs(),
         )
         job_id, _ = self._submit(payload)
-        try:
-            result = get_job_probabilities.sync(
-                uuid=job_id, client=self._client, sharpen=self._sharpen
-            )
-        except IonQError as err:
-            raise DeviceError(f"{self.name}: fetching results failed: {err}") from err
-        return _samples_from_probs(result.additional_properties, n, tape.shots)
+        return self._fetch_samples(job_id, n, tape.shots)
 
     def _run_many(self, tapes):
         children = [self._gates(t) for t in tapes]
@@ -550,18 +535,21 @@ class IonQDevice(Device):
         child_ids = response.child_job_ids or []
         if len(child_ids) != len(tapes):
             raise DeviceError(f"{self.name}: expected {len(tapes)} children, got {len(child_ids)}")
-        # child_job_ids are full standalone job UUIDs; fetch each child's
-        # probabilities via the per-job endpoint (children complete with the parent).
-        results = []
-        for child_id, tape, (n, _) in zip(child_ids, tapes, children, strict=True):
-            try:
-                result = get_job_probabilities.sync(
-                    uuid=child_id, client=self._client, sharpen=self._sharpen
-                )
-            except IonQError as err:
-                raise DeviceError(f"{self.name}: child {child_id} failed: {err}") from err
-            results.append(_samples_from_probs(result.additional_properties, n, tape.shots))
-        return tuple(results)
+        # child_job_ids are standalone job UUIDs; fetch each child's
+        # probabilities via the per-job endpoint (children complete with parent).
+        return tuple(
+            self._fetch_samples(cid, n, tape.shots)
+            for cid, tape, (n, _) in zip(child_ids, tapes, children, strict=True)
+        )
+
+    def _fetch_samples(self, job_id, n, shots):
+        try:
+            result = get_job_probabilities.sync(
+                uuid=job_id, client=self._client, sharpen=self._sharpen
+            )
+        except IonQError as err:
+            raise DeviceError(f"{self.name}: fetching {job_id} failed: {err}") from err
+        return _samples_from_probs(result.additional_properties, n, shots)
 
     def _submit(self, payload):
         try:
