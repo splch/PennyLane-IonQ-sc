@@ -3,7 +3,7 @@ name = "pennylane-ionq"
 version = "0.45.0"
 description = "PennyLane plugin for IonQ Quantum Cloud"
 requires-python = ">=3.11"
-dependencies = ["pennylane>=0.44", "ionq-core~=0.1.0"]
+dependencies = ["pennylane>=0.44", "ionq-core"]
 
 [project.entry-points."pennylane.plugins"]
 "ionq.simulator" = "pennylane_ionq:IonQSimulatorDevice"
@@ -15,6 +15,9 @@ build-backend = "hatchling.build"
 
 [dependency-groups]
 dev = ["pytest>=8", "ruff>=0.6", "ty"]
+
+[tool.uv.sources]
+ionq-core = { git = "https://github.com/ionq/ionq-core-python.git", branch = "pauliexp-gate-schema" }
 
 [tool.ruff]
 line-length = 100

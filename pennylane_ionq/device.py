@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import contextlib
 import math
-from dataclasses import asdict, dataclass
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Literal
@@ -30,8 +29,26 @@ from ionq_core.models import (
     CircuitJobCreationPayloadSettings,
     CircuitJobCreationPayloadSettingsCompilation,
     CircuitJobCreationPayloadSettingsErrorMitigation,
+    GateCnot,
+    GateH,
     GateNativeGate,
-    GateQisGate,
+    GatePauliexp,
+    GateRx,
+    GateRy,
+    GateRz,
+    GateS,
+    GateSi,
+    GateSwap,
+    GateT,
+    GateTi,
+    GateV,
+    GateVi,
+    GateX,
+    GateXX,
+    GateY,
+    GateYY,
+    GateZ,
+    GateZZ,
     JobMetadata,
     JsonMultiCircuitInput,
     JSONMultiCircuitJob,
@@ -86,26 +103,29 @@ _OBSERVABLES = frozenset(
     }
 )
 
-_QIS_GATES: dict[str, str] = {
-    "Hadamard": "h",
-    "PauliX": "x",
-    "PauliY": "y",
-    "PauliZ": "z",
-    "S": "s",
-    "T": "t",
-    "SX": "v",
-    "SWAP": "swap",
-    "Adjoint(S)": "si",
-    "Adjoint(T)": "ti",
-    "Adjoint(SX)": "vi",
-    "RX": "rx",
-    "RY": "ry",
-    "RZ": "rz",
-    "CNOT": "cnot",
-    "IsingXX": "xx",
-    "IsingYY": "yy",
-    "IsingZZ": "zz",
-    "Evolution": "pauliexp",
+# PennyLane op name -> (ionq-core gate model class, gate literal). Op data
+# (rotation) is forwarded automatically when the model accepts it; CNOT is
+# the one shape exception (split target/control).
+_QIS_GATES: dict[str, tuple[type, str]] = {
+    "Hadamard": (GateH, "h"),
+    "PauliX": (GateX, "x"),
+    "PauliY": (GateY, "y"),
+    "PauliZ": (GateZ, "z"),
+    "S": (GateS, "s"),
+    "T": (GateT, "t"),
+    "SX": (GateV, "v"),
+    "Adjoint(S)": (GateSi, "si"),
+    "Adjoint(T)": (GateTi, "ti"),
+    "Adjoint(SX)": (GateVi, "vi"),
+    "RX": (GateRx, "rx"),
+    "RY": (GateRy, "ry"),
+    "RZ": (GateRz, "rz"),
+    "SWAP": (GateSwap, "swap"),
+    "CNOT": (GateCnot, "cnot"),
+    "IsingXX": (GateXX, "xx"),
+    "IsingYY": (GateYY, "yy"),
+    "IsingZZ": (GateZZ, "zz"),
+    "Evolution": (GatePauliexp, "pauliexp"),
 }
 
 _NATIVE_GATES: dict[str, str] = {"GPI": "gpi", "GPI2": "gpi2", "MS": "ms", "IonQZZ": "zz"}
@@ -114,35 +134,17 @@ _NATIVE_GATES: dict[str, str] = {"GPI": "gpi", "GPI2": "gpi2", "MS": "ms", "IonQ
 _PAULIEXP_IMAG_ATOL = 1e-12
 
 
-@dataclass
-class _PauliExpGate:
-    """IonQ ``pauliexp`` gate payload.
-
-    ``ionq-core`` 0.1.x's ``GateQisGate`` lacks ``terms``/``time``/
-    ``coefficients`` fields, so we duck-type the ``to_dict`` interface used by
-    ``QisCircuitInput.to_dict``.
-    """
-
-    targets: list[int]
-    terms: list[str]
-    time: float
-    coefficients: list[float]
-
-    def to_dict(self) -> dict:
-        return {"gate": "pauliexp", **asdict(self)}
-
-
-def _pauliexp_op(op) -> _PauliExpGate | None:
+def _pauliexp_op(op) -> GatePauliexp | None:
     """Serialize :class:`pennylane.ops.op_math.Evolution` to IonQ ``pauliexp``.
 
     ``Evolution(H, t)`` is :math:`e^{-i t H}` and IonQ's ``pauliexp`` is
-    :math:`e^{-i \\, time \\sum_j c_j P_j}`, so ``time`` and ``coefficients``
-    pass through unchanged. Identity-only Pauli words contribute a global
-    phase and are dropped; if the entire generator reduces to the identity,
-    no gate is emitted.
+    :math:`e^{-i \\, time \\sum_j c_j P_j}`. The schema requires ``time > 0``,
+    so a negative ``t`` is folded into the sign of every coefficient; ``t == 0``
+    is the identity and emits no gate. Identity-only Pauli words contribute
+    only a global phase and are dropped.
 
-    Pauli strings are packed little-endian over ``targets``: the rightmost
-    character corresponds to ``targets[0]``.
+    Pauli strings are big-endian over ``targets``: ``terms[k][i]`` acts on
+    ``targets[i]``.
     """
     sentence = op.base.pauli_rep
     if sentence is None:
@@ -161,25 +163,30 @@ def _pauliexp_op(op) -> _PauliExpGate | None:
         c = complex(coeff)
         if abs(c.imag) > _PAULIEXP_IMAG_ATOL:
             raise ValueError(f"{op.name}: pauliexp requires real Pauli coefficients (got {coeff}).")
-        terms.append("".join(word.get(w, "I") for w in targets)[::-1])
+        terms.append("".join(word.get(w, "I") for w in targets))
         coefficients.append(c.real)
 
-    if not terms:
+    time = float(op.data[0])
+    if not terms or time == 0:
         return None
-    return _PauliExpGate(targets, terms, float(op.data[0]), coefficients)
+    if time < 0:
+        time = -time
+        coefficients = [-c for c in coefficients]
+    return GatePauliexp(
+        gate="pauliexp", targets=targets, terms=terms, coefficients=coefficients, time=time
+    )
 
 
-def _qis_op(op) -> GateQisGate | _PauliExpGate | None:
+def _qis_op(op):
     if op.name == "Evolution":
         return _pauliexp_op(op)
-    name = _QIS_GATES[op.name]
+    cls, gate = _QIS_GATES[op.name]
     wires = list(op.wires)
-    rotation = float(op.data[0]) if op.data else UNSET
-    if name == "cnot":
-        return GateQisGate(gate=name, control=wires[0], target=wires[1])
-    if len(wires) == 2:
-        return GateQisGate(gate=name, targets=wires, rotation=rotation)
-    return GateQisGate(gate=name, target=wires[0], rotation=rotation)
+    if cls is GateCnot:
+        return cls(gate=gate, targets=[wires[1]], controls=[wires[0]])
+    if op.data:
+        return cls(gate=gate, targets=wires, rotation=float(op.data[0]))
+    return cls(gate=gate, targets=wires)
 
 
 def _native_op(op) -> GateNativeGate:

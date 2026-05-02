@@ -276,16 +276,12 @@ wheels = [
 [[package]]
 name = "ionq-core"
 version = "0.1.1"
-source = { registry = "https://pypi.org/simple" }
+source = { git = "https://github.com/ionq/ionq-core-python.git?branch=pauliexp-gate-schema#1a7be34ab79a9eafb1a02e432ca729b35764a220" }
 dependencies = [
     { name = "attrs" },
     { name = "httpx" },
     { name = "httpx-retries" },
     { name = "python-dateutil" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/97/23/037cc48053e171ae39a34373170486ec2a134ede4de6f8e849f34764dddb/ionq_core-0.1.1.tar.gz", hash = "sha256:a269525e09c76022174b3c4fc7651e06fd33bf97235c457ed3233723193d7fbe", size = 131502, upload-time = "2026-05-01T19:21:09.904Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/2d/15/113f37f08fdba8d60d765efc6c5cd09efa895b3e1a6d7991b57f2de9d332/ionq_core-0.1.1-py3-none-any.whl", hash = "sha256:f781d651eb25bebdfe91208ea35ba9826e52cb9262cff262c01ed8699c0103c2", size = 167842, upload-time = "2026-05-01T19:21:08.346Z" },
 ]
 
 [[package]]
@@ -428,7 +424,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "ionq-core", specifier = "~=0.1.0" },
+    { name = "ionq-core", git = "https://github.com/ionq/ionq-core-python.git?branch=pauliexp-gate-schema" },
     { name = "pennylane", specifier = ">=0.44" },
 ]
 
