@@ -1,24 +1,25 @@
 schema = 3
 
 [operators.gates]
-PauliX = { properties = ["invertible", "controllable", "differentiable"] }
-PauliY = { properties = ["invertible", "controllable", "differentiable"] }
-PauliZ = { properties = ["invertible", "controllable", "differentiable"] }
-Hadamard = { properties = ["invertible", "controllable", "differentiable"] }
-S = { properties = ["invertible", "controllable", "differentiable"] }
-T = { properties = ["invertible", "controllable", "differentiable"] }
-SX = { properties = ["invertible", "controllable", "differentiable"] }
+PauliX = { properties = ["invertible"] }
+PauliY = { properties = ["invertible"] }
+PauliZ = { properties = ["invertible"] }
+Hadamard = { properties = ["invertible"] }
+S = { properties = ["invertible"] }
+T = { properties = ["invertible"] }
+SX = { properties = ["invertible"] }
 "Adjoint(S)" = { properties = ["invertible"] }
 "Adjoint(T)" = { properties = ["invertible"] }
 "Adjoint(SX)" = { properties = ["invertible"] }
-RX = { properties = ["invertible", "differentiable"] }
-RY = { properties = ["invertible", "differentiable"] }
-RZ = { properties = ["invertible", "differentiable"] }
-CNOT = { properties = ["invertible", "differentiable"] }
-SWAP = { properties = ["invertible", "differentiable"] }
-IsingXX = { properties = ["invertible", "differentiable"] }
-IsingYY = { properties = ["invertible", "differentiable"] }
-IsingZZ = { properties = ["invertible", "differentiable"] }
+RX = { properties = ["invertible"] }
+RY = { properties = ["invertible"] }
+RZ = { properties = ["invertible"] }
+CNOT = { properties = ["invertible"] }
+SWAP = { properties = ["invertible"] }
+IsingXX = { properties = ["invertible"] }
+IsingYY = { properties = ["invertible"] }
+IsingZZ = { properties = ["invertible"] }
+Evolution = { properties = ["invertible"] }
 GPI = { properties = [] }
 GPI2 = { properties = [] }
 MS = { properties = [] }
@@ -49,4 +50,3 @@ dynamic_qubit_management = false
 overlapping_observables = true
 non_commuting_observables = true
 initial_state_prep = false
-supported_mcm_methods = ["one-shot"]
